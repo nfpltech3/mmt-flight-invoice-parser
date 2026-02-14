@@ -30,6 +30,34 @@ STATE_TO_BRANCH = {
     "36": "TELANGANA", "37": "ANDHRA PRADESH", "38": "LADAKH"
 }
 
+# Map Vendor GSTIN to Organization Branch
+VENDOR_GSTIN_MAP = {
+    "27ABECS9580P1ZC": "MUMBAI",
+    "24AABCI2726B1Z8": "VADODRA",
+    "27AABCI2726B1Z2": "SANTACRUZ",
+    "32AABCI2726B1ZB": "COCHIN",
+    "05AABCI2726B1Z8": "UTTARAKHAND",
+    "03AABCI2726B1ZC": "PUNJAB",
+    "07AABCI2726B1Z4": "NEW DELHI",
+    "08AABCI2726B1Z2": "RAJASTHAN",
+    "30AABCI2726B1ZF": "GOA",
+    "36AABCI2726B1Z3": "TELANGANA",
+    "07AACCN6194P2ZQ": "NEW DELHI",
+    "27AACCN6194P1ZP": "MUMBAI",
+    "24AACCN6194P1ZV": "GUJARAT",
+    "03AACCN6194P1ZZ": "PUNJAB",
+    "27AABCA0522B1ZK": "MUMBAI"
+}
+
+# Map Customer GSTIN to Branch
+CUSTOMER_GSTIN_MAP = {
+    "27AACCN5739J1Z4": "HO",
+    "06AACCN5739J1Z8": "HARYANA",
+    "33AACCN5739J1ZB": "CHENNAI",
+    "24AACCN5739J1ZA": "GUJARAT",
+    "27AACCN5739J2Z3": "ISD"
+}
+
 # 41 CSV Headers matching the template
 CSV_HEADERS = [
     "Entry Date",           # 1
@@ -78,7 +106,7 @@ CSV_HEADERS = [
 
 def get_current_date_formatted() -> str:
     """Get current date in DD-MMM-YYYY format."""
-    return datetime.now().strftime("%d-%b-%Y").upper()
+    return datetime.now().strftime("%d-%b-%Y") # Title Case
 
 
 def map_airline_to_organization(airline: str) -> str:
@@ -135,8 +163,28 @@ def invoice_to_csv_row(
     if entry_date is None:
         entry_date = get_current_date_formatted()
     
-    # Determine branch from customer GSTIN state code
-    branch = STATE_TO_BRANCH.get(invoice.state_code, "GUJARAT")
+    # Determine Branch (Customer GSTIN based)
+    branch = ""
+    if invoice.customer_gstin:
+        branch = CUSTOMER_GSTIN_MAP.get(invoice.customer_gstin)
+        if not branch:
+            # Fallback to state code map
+            state_code = invoice.customer_gstin[:2]
+            branch = STATE_TO_BRANCH.get(state_code, "")
+            
+    if not branch and invoice.state_code:
+        branch = STATE_TO_BRANCH.get(invoice.state_code, "GUJARAT")
+    if not branch:
+        branch = "GUJARAT"
+
+    # Determine Organization Branch (Vendor GSTIN based)
+    org_branch = ""
+    if invoice.vendor_gstin:
+        org_branch = VENDOR_GSTIN_MAP.get(invoice.vendor_gstin)
+        if not org_branch:
+             # Fallback to state logic if extracted
+             state_code = invoice.vendor_gstin[:2]
+             org_branch = STATE_TO_BRANCH.get(state_code, "")
     
     # Determine DR or CR based on invoice type
     dr_cr = "Dr" if invoice.invoice_type == "TAX_INVOICE" else "Cr"
@@ -166,33 +214,26 @@ def invoice_to_csv_row(
     taxcode3_amt = ""
     
     if not is_non_taxable:
-        if invoice.cgst_amount > 0:
+        if invoice.igst_amount > 0:
+            taxcode1 = "IGST"
+            taxcode1_amt = str(invoice.igst_amount)
+        elif invoice.cgst_amount > 0:
             taxcode1 = "CGST"
             taxcode1_amt = str(invoice.cgst_amount)
-        if invoice.sgst_amount > 0:
-            if not taxcode1:
-                taxcode1 = "SGST"
-                taxcode1_amt = str(invoice.sgst_amount)
-            else:
+            if invoice.sgst_amount > 0:
                 taxcode2 = "SGST"
                 taxcode2_amt = str(invoice.sgst_amount)
-        if invoice.igst_amount > 0:
-            if not taxcode1:
-                taxcode1 = "IGST"
-                taxcode1_amt = str(invoice.igst_amount)
-            elif not taxcode2:
-                taxcode2 = "IGST"
-                taxcode2_amt = str(invoice.igst_amount)
-            else:
-                taxcode3 = "IGST"
-                taxcode3_amt = str(invoice.igst_amount)
+        # Fallback for weird cases (e.g. only SGST? Unlikely)
+        elif invoice.sgst_amount > 0:
+            taxcode1 = "SGST"
+            taxcode1_amt = str(invoice.sgst_amount)
     
     # Build the row
     row = {
         "Entry Date": entry_date,
         "Posting Date": entry_date,
         "Organization": map_airline_to_organization(invoice.airline),
-        "Organization Branch": branch,
+        "Organization Branch": org_branch,
         "Vendor Inv No": invoice.invoice_number,
         "Vendor Inv Date": invoice.invoice_date,
         "Currency": invoice.currency,
@@ -203,8 +244,8 @@ def invoice_to_csv_row(
         "Charge or GL Name": "TRAVELLING EXPENSES",
         "Charge or GL Amount": str(amount),
         "DR or CR": dr_cr,
-        "Cost Center": "nil",
-        "Branch": "HO",
+        "Cost Center": "",
+        "Branch": branch,
         " Charge Narration": "",
         "TaxGroup": "GSTIN" if invoice.customer_gstin and not is_non_taxable else "",
         "Tax Type": "Non-Taxable" if is_non_taxable else "Taxable",
@@ -217,7 +258,7 @@ def invoice_to_csv_row(
         "Taxcode3 Amt": taxcode3_amt,
         "Taxcode4": "",
         "Taxcode4 Amt": "",
-        "Avail Tax Credit": "Yes" if not is_non_taxable else "",
+        "Avail Tax Credit": "Yes" if not is_non_taxable else "No",
         "LOB": "",
         "Ref Type": "",
         "Ref No": "",
@@ -316,8 +357,9 @@ def generate_csv(
         else:
             state = "Unknown"
         
-        # Create filename
-        filename = f"{filename_prefix}_{state}_{gstin}.csv"
+        # Create filename with timestamp to avoid overwriting
+        timestamp = datetime.now().strftime("%d%b%Y_%H%M").upper()
+        filename = f"{filename_prefix}_{state}_{gstin}_{timestamp}.csv"
         filepath = os.path.join(output_dir, filename)
         
         # Write CSV

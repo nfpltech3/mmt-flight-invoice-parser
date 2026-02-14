@@ -20,6 +20,7 @@ class InvoiceData:
     invoice_type: str = ""  # TAX_INVOICE or DEBIT
     customer_name: str = ""
     customer_gstin: str = ""
+    vendor_gstin: str = ""   # Added field for Supplier GSTIN
     place_of_supply: str = ""
     state_code: str = ""
     currency: str = "INR"
@@ -106,7 +107,7 @@ def parse_date_to_standard(date_str: str) -> str:
     for fmt in formats:
         try:
             dt = datetime.strptime(date_str, fmt)
-            return dt.strftime("%d-%b-%Y").upper()
+            return dt.strftime("%d-%b-%Y") # Title Case: 14-May-2025
         except ValueError:
             continue
     
@@ -177,6 +178,11 @@ class AirIndiaParser(BaseParser):
         if inv_match:
             data.invoice_number = inv_match.group(1).strip()
         
+        # Vendor GSTIN (Supplier) - usually first GSTIN occurrence
+        vendor_match = re.search(r'GSTIN\s*[:\s]*(\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d]{2})', text, re.IGNORECASE)
+        if vendor_match:
+            data.vendor_gstin = vendor_match.group(1)
+        
         # Invoice/Debit Note Date
         date_match = re.search(r'(?:Invoice|Debit\s*Note)\s*Date\s*[:\s]*(\d{1,2}[/\-]\d{1,2}[/\-]\d{4})', text, re.IGNORECASE)
         if date_match:
@@ -218,16 +224,16 @@ class AirIndiaParser(BaseParser):
         if total_match:
             data.total_amount = parse_amount(total_match.group(1))
         
-        # Find taxable value from the 996425 row - Air India format
+        # Air India: 996425 row
         # Pattern: 996425-...service 3,792.00 170.00 236.00 0.00 3,962.00 5 % 99.50 99.50 0.00 4,397.00
-        sac_line = re.search(r'996425[^\n]*?(\d[\d,]*\.\d{2})\s+[\d,\.]+\s+[\d,\.]+\s+[\d,\.]+\s+(\d[\d,]*\.\d{2})\s+\d+\s*%', text)
+        sac_line = re.search(r'996425[^\n]*?(\d[\d,]*\.\d+)\s+[\d,\.]+\s+[\d,\.]+\s+[\d,\.]+\s+(\d[\d,]*\.\d+)\s+\d+\s*%', text)
         if sac_line:
             data.taxable_value = parse_amount(sac_line.group(1))  # First amount after SAC
         
         # For Air India, parse tax from the table row ending with tax amounts
         # The 996425 row ends with: taxable 5% CGST SGST IGST Total
         # e.g., 3,962.00 5 % 99.50 99.50 0.00 4,397.00
-        tax_row = re.search(r'(\d[\d,]*\.\d{2})\s+5\s*%\s+(\d[\d,]*\.\d{2})\s+(\d[\d,]*\.\d{2})\s+(\d[\d,]*\.\d{2})\s+(\d[\d,]*\.\d{2})', text)
+        tax_row = re.search(r'(\d[\d,]*\.\d+)\s+5\s*%\s+(\d[\d,]*\.\d+)\s+(\d[\d,]*\.\d+)\s+(\d[\d,]*\.\d+)\s+(\d[\d,]*\.\d+)', text)
         if tax_row:
             data.taxable_value = parse_amount(tax_row.group(1))
             data.cgst_amount = parse_amount(tax_row.group(2))
@@ -237,6 +243,22 @@ class AirIndiaParser(BaseParser):
             data.cgst_rate = 2.5 if data.cgst_amount > 0 else 0
             data.sgst_rate = 2.5 if data.sgst_amount > 0 else 0
             data.igst_rate = 5.0 if data.igst_amount > 0 else 0
+        
+        # Non-taxable value from SAC row (3rd amount column = non-taxable)
+        # Pattern: 996425-... 4,593.00 170.00 443.00 0.00 4,763.00 ...
+        non_tax_match = re.search(r'996425[^\n]*?\d[\d,]*\.\d{2}\s+[\d,\.]+\s+(\d[\d,]*\.\d{2})\s+[\d,\.]+\s+\d[\d,]*\.\d{2}\s+\d+\s*%', text)
+        if non_tax_match:
+            non_tax = parse_amount(non_tax_match.group(1))
+            if non_tax > 0:
+                data.non_taxable_value = non_tax
+        
+        # Fallback: "Non-taxable fare details: P2 = 236.00; IN = 207.00"
+        if data.non_taxable_value == 0:
+            non_tax_line = re.search(r'Non-taxable\s*fare\s*details\s*:\s*(.+)', text, re.IGNORECASE)
+            if non_tax_line:
+                amounts = re.findall(r'(\d[\d,]*\.\d{2})', non_tax_line.group(1))
+                if amounts:
+                    data.non_taxable_value = sum(parse_amount(a) for a in amounts)
         
         return data
 
@@ -256,6 +278,11 @@ class AirIndiaExpressParser(BaseParser):
         inv_match = re.search(r'Invoice\s*Number\s*[:\s]*([A-Z0-9]+)', text, re.IGNORECASE)
         if inv_match:
             data.invoice_number = inv_match.group(1).strip()
+            
+        # Vendor GSTIN (Supplier) - AI Express uses "GSTN"
+        vendor_match = re.search(r'GSTN\s*[:\s]*(\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d]{2})', text, re.IGNORECASE)
+        if vendor_match:
+            data.vendor_gstin = vendor_match.group(1)
         
         # Invoice Date
         date_match = re.search(r'Invoice\s*Date\s*[:\s]*(\d{1,2}[/\-]\d{1,2}[/\-]\d{4})', text, re.IGNORECASE)
@@ -293,23 +320,39 @@ class AirIndiaExpressParser(BaseParser):
         if data.flight_from and data.flight_to:
             data.routing = f"{data.flight_from} TO {data.flight_to}"
         
-        # Total Invoice amount
-        total_match = re.search(r'Total\s*Invoice[^\d]*(\d[\d,]*\.?\d*)', text, re.IGNORECASE)
-        if total_match:
-            data.total_amount = parse_amount(total_match.group(1))
+        # Total from Grand Total line (last amount)
+        # Grand Total 31,451.42 1,772.00 33,223.42 1,572.58 34,796.00
+        grand_total_line = re.search(r'Grand\s*Total.*', text, re.IGNORECASE)
+        if grand_total_line:
+            amounts = re.findall(r'(\d[\d,]*\.\d{2})', grand_total_line.group(0))
+            if amounts:
+                data.total_amount = parse_amount(amounts[-1])  # Last amount = grand total
         
-        # Taxable Value
-        taxable_match = re.search(r'Taxable\s*Value[^\d]*(\d[\d,]*\.?\d*)', text, re.IGNORECASE)
-        if taxable_match:
-            data.taxable_value = parse_amount(taxable_match.group(1))
+        # Extract from SAC 996425 row:
+        # Air Ticket charges 996425 31,451.42 - 31,451.42 5 % 1,572.58 33,024.00
+        sac_row = re.search(r'996425\s+(\d[\d,]*\.\d{2})', text)
+        if sac_row:
+            data.taxable_value = parse_amount(sac_row.group(1))
         
-        # IGST
-        igst_match = re.search(r'IGST[^\d]*Rate[^\d]*\(?%?\)?[^\d]*(\d+)[^\d]*Amount[^\d]*(\d[\d,]*\.?\d*)', text, re.IGNORECASE)
-        if not igst_match:
-            igst_match = re.search(r'IGST[^\d]*(\d+)\s*%[^\d]*(\d[\d,]*\.?\d*)', text, re.IGNORECASE)
+        # IGST from SAC row: "5 % 1,572.58"
+        igst_match = re.search(r'996425[^\n]*?(\d+)\s*%\s+(\d[\d,]*\.\d{2})', text)
         if igst_match:
             data.igst_rate = parse_amount(igst_match.group(1))
             data.igst_amount = parse_amount(igst_match.group(2))
+        
+        # Non-taxable: Airport Taxes-Pass Through
+        # Pattern: "Airport Taxes-Pass Through - - 1,772.00 1,772.00 ..."
+        airport_match = re.search(r'Airport\s*Taxes[^\n]*?\s(\d[\d,]*\.\d{2})\s+(\d[\d,]*\.\d{2})', text, re.IGNORECASE)
+        if airport_match:
+            data.non_taxable_value = parse_amount(airport_match.group(1))
+        
+        # Fallback: look for "Non Taxable" or "Exempt" value in the table
+        if data.non_taxable_value == 0:
+            non_tax_match = re.search(r'Non\s*Taxable[^\d]*(\d[\d,]*\.?\d*)', text, re.IGNORECASE)
+            if non_tax_match:
+                val = parse_amount(non_tax_match.group(1))
+                if val > 0:
+                    data.non_taxable_value = val
         
         return data
 
@@ -330,10 +373,34 @@ class IndiGoParser(BaseParser):
         if inv_match:
             data.invoice_number = inv_match.group(1).strip()
         
-        # Invoice Date (format: 17-Dec-2025)
-        date_match = re.search(r'Date\s*[:\s]*(\d{1,2}-[A-Za-z]{3}-\d{4})', text)
+        # Invoice Date (format:        # Date: 21-Oct-2025 or 07 Apr 2025
+        # Support permissive separators (dash, space, dot, etc.)
+        # \d{1,2} : 1 or 2 digit day
+        # [^\w\d]+ : One or more non-alphanumeric chars as separator
+        # [A-Za-z]{3} : 3-letter month
+        # \d{4} : 4-digit year
+        date_match = re.search(r'Date\s*[:\s]*(\d{1,2}[^\w\d]+[A-Za-z]{3}[^\w\d]+\d{4})', text, re.IGNORECASE)
         if date_match:
-            data.invoice_date = parse_date_to_standard(date_match.group(1))
+            # Normalize to standard format: replace spaces/separators with single dash
+            raw_date = re.sub(r'[^\w\d]+', '-', date_match.group(1))
+            data.invoice_date = parse_date_to_standard(raw_date)
+        
+            data.invoice_date = parse_date_to_standard(raw_date)
+        
+        # Vendor GSTIN (Supplier) - appears before Customer GSTIN
+        vendor_match = re.search(r'GSTIN\s*[:\s]*(\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d]{2})', text, re.IGNORECASE)
+        # Ensure it's not the customer one if they appear close
+        if vendor_match and "Customer" not in text[vendor_match.start()-20:vendor_match.start()]: 
+             data.vendor_gstin = vendor_match.group(1)
+        elif vendor_match:
+             # Fallback: Find first GSTIN that is NOT followed by "of Customer" or preceded by "Customer"
+             all_matches = re.finditer(r'GSTIN\s*[:\s]*(\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d]{2})', text, re.IGNORECASE)
+             for m in all_matches:
+                 start, end = m.span()
+                 context = text[max(0, start-30):end+30]
+                 if "Customer" not in context:
+                     data.vendor_gstin = m.group(1)
+                     break
         
         # Customer GSTIN
         gstin_match = re.search(r'GSTIN\s*of\s*Customer\s*[:\s]*(\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d]{2})', text, re.IGNORECASE)
@@ -375,13 +442,45 @@ class IndiGoParser(BaseParser):
             if amounts:
                 data.total_amount = parse_amount(amounts[-1])  # Take last amount
         
-        # IndiGo table format: SAC Code Taxable NonTaxable Total Rate Amount...
-        # 996425 6,089.00 0.00 6,089.00 5.00 304.00 0.00 0.00 0.00 0.00 0 0.00 6,393.00
-        indigo_row = re.search(r'996425\s+(\d[\d,]*\.\d{2})\s+[\d,\.]+\s+[\d,\.]+\s+(\d+\.\d{2})\s+(\d[\d,]*\.\d{2})', text)
-        if indigo_row:
-            data.taxable_value = parse_amount(indigo_row.group(1))
-            data.igst_rate = parse_amount(indigo_row.group(2))
-            data.igst_amount = parse_amount(indigo_row.group(3))
+        # IndiGo table parsing using line tokens (more robust)
+        # Find line starting with 996425
+        table_line_match = re.search(r'996425\s+.*', text)
+        if table_line_match:
+            parts = table_line_match.group(0).split()
+            # Basic structure: 0:SAC, 1:Taxable ...
+            if len(parts) > 1:
+                data.taxable_value = parse_amount(parts[1])
+            
+            # Format detection based on token count
+            # Use negative indexing to be safer against inserted columns
+            # Structure ends with: ... CGST_R CGST_A SGST_R SGST_A IGST_R IGST_A Total
+            # We see length 13 for 3-pair format. Old format length 7-8.
+            
+            if len(parts) >= 11:
+                # 3 Pairs logic (CGST, SGST, IGST)
+                # CGST: -7, -6
+                data.cgst_rate = parse_amount(parts[-7])
+                data.cgst_amount = parse_amount(parts[-6])
+                
+                # SGST: -5, -4
+                data.sgst_rate = parse_amount(parts[-5])
+                data.sgst_amount = parse_amount(parts[-4])
+                
+                # IGST: -3, -2  (Last item -1 is Total)
+                data.igst_rate = parse_amount(parts[-3])
+                data.igst_amount = parse_amount(parts[-2])
+                
+            elif len(parts) >= 6:
+                # Old format: ... Rate Amt Total (Last 3)
+                # IGST only
+                data.igst_rate = parse_amount(parts[-3])
+                data.igst_amount = parse_amount(parts[-2])
+        
+        # Airport Charges (Non-taxable / Exempted)
+        # Pattern: "Airport Charges   0.00   974.00   974.00 ..."
+        airport_match = re.search(r'Airport\s*Charges\s+[\d,\.]+\s+(\d[\d,]*\.\d{2})', text, re.IGNORECASE)
+        if airport_match:
+            data.non_taxable_value = parse_amount(airport_match.group(1))
         
         return data
 
@@ -407,6 +506,16 @@ class AkasaAirParser(BaseParser):
         if date_match:
             data.invoice_date = parse_date_to_standard(date_match.group(1))
         
+        # Vendor GSTIN (Supplier)
+        vendor_match = re.search(r'GSTIN\s*[:\s]*(\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d]{2})', text, re.IGNORECASE)
+        # Ensure it's not the customer one (Customer one is usually "GSTIN/Unique ID of Customer")
+        if vendor_match and "Customer" not in text[vendor_match.start():vendor_match.end()+20]:
+             data.vendor_gstin = vendor_match.group(1)
+        elif vendor_match:
+             # Fallback: check context
+             if "Customer" not in text[max(0, vendor_match.start()-20):vendor_match.start()]:
+                 data.vendor_gstin = vendor_match.group(1)
+        
         # Customer GSTIN
         gstin_match = re.search(r'GSTIN[/\s]*Unique\s*ID\s*of\s*Customer\s*[:\s]*(\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d]{2})', text, re.IGNORECASE)
         if gstin_match:
@@ -430,29 +539,52 @@ class AkasaAirParser(BaseParser):
             data.flight_from = from_match.group(1)
             data.routing = f"{data.flight_from}"
         
-        # Grand Total - Akasa format ends line with total
-        total_match = re.search(r'Grand\s*Total[^\n]*(\d[\d,]*\.\d{2})\s*$', text, re.IGNORECASE | re.MULTILINE)
-        if total_match:
-            data.total_amount = parse_amount(total_match.group(1))
+        # Grand Total - Akasa format: last amount on the line is the grand total
+        # Grand Total 10518.00 1018.00 398.00 11138.00 0.00 0.00 506.00 11644.00
+        # Columns: [0]Taxable [1]NonTax [2]Discount [3]TaxableTotal [4]CGST [5]SGST [6]IGST [7]GrandTotal
+        grand_total_line = re.search(r'Grand\s*Total.*', text, re.IGNORECASE)
+        if grand_total_line:
+            amounts = re.findall(r'(\d[\d,]*\.\d+)', grand_total_line.group(0))
+            if len(amounts) >= 8:
+                data.taxable_value = parse_amount(amounts[0])
+                data.non_taxable_value = parse_amount(amounts[1])
+                data.cgst_amount = parse_amount(amounts[4]) 
+                data.sgst_amount = parse_amount(amounts[5])
+                data.igst_amount = parse_amount(amounts[6])
+                data.total_amount = parse_amount(amounts[7])
+                
+                # Set rates if amounts exist
+                if data.cgst_amount > 0: data.cgst_rate = 2.5
+                if data.sgst_amount > 0: data.sgst_rate = 2.5
+                if data.igst_amount > 0:
+                    # Calculate approximate rate
+                    if data.taxable_value > 0:
+                        rate = (data.igst_amount / data.taxable_value) * 100
+                        data.igst_rate = 5.0 if abs(rate - 5.0) < 1.0 else 18.0 # Default to 5 or 18
+                    else:
+                        data.igst_rate = 5.0 # Default fallback
+            elif amounts:
+                data.total_amount = parse_amount(amounts[-1])
         
         # Akasa table: SAC Taxable NonTax Discount Total Rate Amount...
-        # 996425 5219.00 0.00 197.00 5022.00 0% 0.0 0% 0.0 5% 252.00 5274.00
-        akasa_row = re.search(r'996425\s+(\d[\d,]*\.\d{2})\s+[\d,\.]+\s+[\d,\.]+\s+(\d[\d,]*\.\d{2})[^\d]+\d+%[^\d]+[\d,\.]+[^\d]+\d+%[^\d]+[\d,\.]+[^\d]+5%\s+(\d[\d,]*\.\d{2})\s+(\d[\d,]*\.\d{2})', text)
-        if akasa_row:
-            data.taxable_value = parse_amount(akasa_row.group(1))
-            # taxable after discount in group 2
-            data.igst_amount = parse_amount(akasa_row.group(3))
-            data.total_amount = parse_amount(akasa_row.group(4))
-            data.igst_rate = 5.0
-        else:
-            # Fallback: simpler pattern
-            taxable_match = re.search(r'996425\s+(\d[\d,]*\.\d{2})', text)
-            if taxable_match:
-                data.taxable_value = parse_amount(taxable_match.group(1))
-            igst_match = re.search(r'5%\s+(\d[\d,]*\.\d{2})', text)
-            if igst_match:
-                data.igst_amount = parse_amount(igst_match.group(1))
+        # Only parse if we didn't get data from Grand Total line
+        if data.total_amount == 0:
+            akasa_row = re.search(r'996425\s+(\d[\d,]*\.\d+)\s+[\d,\.]+\s+[\d,\.]+\s+(\d[\d,]*\.\d+)[^\d]+\d+%[^\d]+[\d,\.]+[^\d]+\d+%[^\d]+[\d,\.]+[^\d]+5%\s+(\d[\d,]*\.\d+)\s+(\d[\d,]*\.\d+)', text)
+            if akasa_row:
+                data.taxable_value = parse_amount(akasa_row.group(1))
+                # taxable after discount in group 2
+                data.igst_amount = parse_amount(akasa_row.group(3))
+                # Don't overwrite total_amount here - Grand Total (line 472) has the correct full total
                 data.igst_rate = 5.0
+            else:
+                # Fallback: simpler pattern
+                taxable_match = re.search(r'996425\s+(\d[\d,]*\.\d{2})', text)
+                if taxable_match:
+                    data.taxable_value = parse_amount(taxable_match.group(1))
+                igst_match = re.search(r'5%\s+(\d[\d,]*\.\d{2})', text)
+                if igst_match:
+                    data.igst_amount = parse_amount(igst_match.group(1))
+                    data.igst_rate = 5.0
         
         # Airport Charges (Non-taxable)
         # Pattern: "Airport Charges   0.00   443.00   0.00   443.00 ..."
@@ -561,7 +693,12 @@ def extract_text_from_pdf(pdf_path: str, page_num: int = 0) -> str:
         if page_num < len(pdf.pages):
             page = pdf.pages[page_num]
             text = page.extract_text()
-            return text if text else ""
+            if text:
+                # Fix numbers split across lines by PDF extraction
+                # e.g., "10,864.0\n0" -> "10,864.00" or "11,838.\n00" -> "11,838.00"
+                text = re.sub(r'(\d\.\d)\n(\d)', r'\1\2', text)
+                text = re.sub(r'(\d\.)\n(\d)', r'\1\2', text)
+                return text
     return ""
 
 
