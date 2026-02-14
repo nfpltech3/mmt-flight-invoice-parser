@@ -8,6 +8,8 @@ GUI application to parse airline PDF invoices (IndiGo, Air India, Akasa Air, etc
 - Tkinter (Built-in)
 - Pillow
 
+> 📖 **See [USER_GUIDE.md](USER_GUIDE.md) for detailed usage instructions.**
+
 ---
 
 ## Installation
@@ -72,7 +74,7 @@ To generate a standalone `.exe` file for distribution:
    *(Running directly on `invoice_processor.py` may miss assets like the logo)*
 
 4. **Locate Executable**:
-   The `InvoiceParser.exe` will be in the `dist/` folder.
+   The `MMT Flight Invoice Parser.exe` will be in the `dist/` folder.
 
 ---
 
