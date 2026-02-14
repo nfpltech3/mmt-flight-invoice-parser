@@ -32,7 +32,7 @@ The Airline Invoice Parser is a Windows desktop application designed to streamli
 2. Choose the folder where you want to save the Excel/CSV files.
 3. Click **Select Folder**.
 4. The app will generate the CSV files and display a "✓ Complete!" message in the log.
-   - The files are named automatically: `transport_expenses_[State]_[GSTIN]_[Timestamp].csv`.
+   - The files are named automatically: `Flight_Exp_[State]_[GSTIN-Suffix]_[Date].csv` (e.g., `Flight_Exp_Maharashtra_J1Z4_14FEB.csv`).
 
 ---
 

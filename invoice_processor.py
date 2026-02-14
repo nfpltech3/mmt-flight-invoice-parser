@@ -1193,8 +1193,13 @@ def generate_csv(
             state = "Unknown"
         
         # Create filename with timestamp to avoid overwriting
-        timestamp = datetime.now().strftime("%d%b%Y_%H%M").upper()
-        filename = f"{filename_prefix}_{state}_{gstin}_{timestamp}.csv"
+        # Create filename with timestamp to avoid overwriting
+        timestamp = datetime.now().strftime("%d%b").upper() # 14FEB
+        gstin_suffix = gstin[-4:] if len(gstin) >= 4 else gstin
+        
+        # Format: Flight_Exp_Maharashtra_J1Z4_14FEB.csv
+        state_clean = state.replace(" ", "")
+        filename = f"Flight_Exp_{state_clean}_{gstin_suffix}_{timestamp}.csv"
         filepath = os.path.join(output_dir, filename)
         
         # Write CSV
