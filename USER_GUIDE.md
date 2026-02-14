@@ -73,4 +73,6 @@ If you see an error in the **Processing Log**, check this table:
   * Gulf Air
 * **Extraction Logic:** Uses text landmarks (Regex) to identify fields. Values are cross-verified (e.g., Taxable + Non-Taxable + Taxes ≈ Total).
 * **CSV Output:** 41-column format matching the Logisys "Purchase Upload" template.
-* **IGST Logic:** If IGST is present, `Avail Tax Credit` is set to `100`; otherwise `Yes`.
+* **IGST Logic:**
+  * **Default:** If IGST is present, `Avail Tax Credit` is set to `100`; otherwise `Yes`.
+  * **18% Rate:** If IGST rate is **18%**, Expense Head changes to `TRAVELLING EXP. (AIRLINE MISC CHARGES)` and SAC to `996429`.

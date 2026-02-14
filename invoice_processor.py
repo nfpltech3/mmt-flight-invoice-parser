@@ -880,7 +880,8 @@ VENDOR_GSTIN_MAP = {
     "27AACCN6194P1ZP": "MUMBAI",
     "24AACCN6194P1ZV": "GUJARAT",
     "03AACCN6194P1ZZ": "PUNJAB",
-    "27AABCA0522B1ZK": "MUMBAI"
+    "27AABCA0522B1ZK": "MUMBAI",
+    "29AABCI2726B1ZY": "KARNATAKA"
 }
 
 # Map Customer GSTIN to Branch
@@ -1063,6 +1064,15 @@ def invoice_to_csv_row(
             taxcode1 = "SGST"
             taxcode1_amt = str(invoice.sgst_amount)
     
+    # Determine Expense Head and SAC Code
+    expense_head = "TRAVELLING EXPENSES"
+    sac_code = "996425"
+    
+    # If IGST is 18%, likely misc charges
+    if invoice.igst_rate == 18.0 and not is_non_taxable:
+        expense_head = "TRAVELLING EXP. (AIRLINE MISC CHARGES)"
+        sac_code = "996429"
+
     # Build the row
     row = {
         "Entry Date": entry_date,
@@ -1075,8 +1085,8 @@ def invoice_to_csv_row(
         "ExchRate": "1",
         "Narration": narration,
         "Due Date": entry_date,
-        "Charge or GL": "TRAVELLING EXPENSES",
-        "Charge or GL Name": "TRAVELLING EXPENSES",
+        "Charge or GL": expense_head,
+        "Charge or GL Name": expense_head,
         "Charge or GL Amount": str(amount),
         "DR or CR": dr_cr,
         "Cost Center": "",
@@ -1084,7 +1094,7 @@ def invoice_to_csv_row(
         " Charge Narration": "AIRPORT CHARGES" if is_non_taxable else "BASE FARE",
         "TaxGroup": "GSTIN" if invoice.customer_gstin and not is_non_taxable else "",
         "Tax Type": "Non-Taxable" if is_non_taxable else "Taxable",
-        "SAC or HSN": "996425" if not is_non_taxable else "",  # Air Transport SAC code only for taxable
+        "SAC or HSN": sac_code if not is_non_taxable else "",  # Air Transport SAC code only for taxable
         "Taxcode1": taxcode1,
         "Taxcode1 Amt": taxcode1_amt,
         "Taxcode2": taxcode2,
