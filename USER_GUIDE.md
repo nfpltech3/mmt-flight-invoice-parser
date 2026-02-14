@@ -33,6 +33,7 @@ The Airline Invoice Parser is a Windows desktop application designed to streamli
 3. Click **Select Folder**.
 4. The app will generate the CSV files and display a "✓ Complete!" message in the log.
    - The files are named automatically: `Flight_Exp_[State]_[GSTIN-Suffix]_[Date].csv` (e.g., `Flight_Exp_Maharashtra_J1Z4_14FEB.csv`).
+   - **Note:** If invoices belong to different Customer GSTINs, separate CSV files will be created for each group.
 
 ---
 
