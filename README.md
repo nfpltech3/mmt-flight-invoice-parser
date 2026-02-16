@@ -1,4 +1,4 @@
-# Nagarkot Invoice Processor
+# MMT Flight Invoice CSV generator
 
 GUI application to parse airline PDF invoices (IndiGo, Air India, Akasa Air, etc.) and generate Logisys-compatible CSV files.
 
