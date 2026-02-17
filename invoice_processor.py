@@ -16,6 +16,7 @@ import pdfplumber
 class InvoiceData:
     """Structured invoice data extracted from PDF."""
     airline: str = ""
+    filename: str = "" # Added to track source file
     invoice_number: str = ""
     invoice_date: str = ""  # DD-MMM-YYYY format
     invoice_type: str = ""  # TAX_INVOICE or DEBIT
@@ -813,6 +814,7 @@ def parse_invoice(pdf_path: str) -> InvoiceData:
     for parser in PARSERS:
         if parser.can_parse(text):
             data = parser.extract(text, invoice_type)
+            data.filename = filename # Set filename
             
             # Validate required fields
             if not data.invoice_number:
@@ -828,6 +830,7 @@ def parse_invoice(pdf_path: str) -> InvoiceData:
     
     # No parser matched
     data = InvoiceData(raw_text=text)
+    data.filename = filename # Set filename
     data.extraction_errors.append(f"Unknown invoice format - no parser matched")
     return data
 
@@ -1064,7 +1067,7 @@ def invoice_to_csv_row(
             taxcode1 = "SGST"
             taxcode1_amt = str(invoice.sgst_amount)
     
-    # Determine Expense Head and SAC Code
+    # Determine Expense Head and SAC Code   
     expense_head = "TRAVELLING EXPENSES"
     sac_code = "996425"
     
@@ -1156,6 +1159,35 @@ def invoice_to_csv_rows(invoice: InvoiceData, entry_date: Optional[str] = None) 
     return rows
 
 
+def generate_summary_report(
+    summary_data: List[Dict[str, Any]],
+    output_dir: str
+) -> str:
+    """
+    Generate a summary CSV report with validation status.
+    Helps users identify why uploads might fail (e.g. unmapped branches).
+    """
+    filename = f"Processing_Summary_{datetime.now().strftime('%d%b_%H%M')}.csv"
+    filepath = os.path.join(output_dir, filename)
+    
+    headers = [
+        "Status", "Issues", "File Name", "Invoice No", "Airline", 
+        "Vendor GSTIN", "Mapped Org Branch", "In Vendor Map?", 
+        "Customer GSTIN", "Mapped Cust Branch", "Amount"
+    ]
+    
+    try:
+        with open(filepath, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+            for row in summary_data:
+                writer.writerow(row)
+        return filepath
+    except Exception as e:
+        print(f"Failed to write summary report: {e}")
+        return ""
+
+
 def group_invoices_by_gstin(invoices: List[InvoiceData]) -> Dict[str, List[InvoiceData]]:
     """Group invoices by customer GSTIN for separate output files."""
     groups = {}
@@ -1195,6 +1227,8 @@ def generate_csv(
     
     entry_date = get_current_date_formatted()
     
+    summary_data = [] # Collect data for validation report
+
     for gstin, inv_list in groups.items():
         # Get state name for filename
         if gstin != "UNKNOWN" and gstin != "all" and len(gstin) >= 2:
@@ -1202,7 +1236,6 @@ def generate_csv(
         else:
             state = "Unknown"
         
-        # Create filename with timestamp to avoid overwriting
         # Create filename with timestamp to avoid overwriting
         timestamp = datetime.now().strftime("%d%b").upper() # 14FEB
         gstin_suffix = gstin[-4:] if len(gstin) >= 4 else gstin
@@ -1218,16 +1251,82 @@ def generate_csv(
             writer.writeheader()
             
             for inv in inv_list:
+                # Validation Logic for Summary
+                file_basename = inv.filename if inv.filename else "Unknown"
+                
+                status = "Success"
+                issues = []
+                
                 if inv.extraction_errors and not inv.invoice_number:
+                    status = "Failed"
+                    issues = "; ".join(inv.extraction_errors)
+                    # Add to summary even if skipped
+                    summary_data.append({
+                        "Status": status,
+                        "Issues": issues,
+                        "File Name": file_basename,
+                        "Invoice No": inv.invoice_number or "N/A",
+                        "Airline": inv.airline,
+                        "Vendor GSTIN": inv.vendor_gstin,
+                        "Mapped Org Branch": "N/A",
+                        "In Vendor Map?": "N/A",
+                        "Customer GSTIN": inv.customer_gstin,
+                        "Mapped Cust Branch": "N/A",
+                        "Amount": str(inv.total_amount)
+                    })
                     continue  # Skip failed extractions
-                # Get all rows (may be multiple for taxable + non-taxable split)
+                
+                # Get mapped rows
                 rows = invoice_to_csv_rows(inv, entry_date)
+                
+                # Check mapping for the first row (representative)
+                if rows:
+                    first_row = rows[0]
+                    org_branch = first_row.get("Organization Branch", "")
+                    cust_branch = first_row.get("Branch", "")
+                    
+                    # Check 1: Org Branch Empty
+                    if not org_branch:
+                        status = "Warning"
+                        issues.append("Org Branch Empty")
+                    
+                    # Check 2: Vendor Mapping
+                    in_map = "Yes"
+                    if inv.vendor_gstin and inv.vendor_gstin not in VENDOR_GSTIN_MAP:
+                        in_map = "No"
+                        if status != "Warning": status = "Warning" # Downgrade if not already
+                        issues.append("Vendor GSTIN not in Map (State Fallback used)")
+                    
+                    # Check 3: Cust Branch
+                    if not cust_branch:
+                        status = "Warning"
+                        issues.append("Customer Branch Empty")
+
+                    summary_data.append({
+                        "Status": status,
+                        "Issues": "; ".join(issues),
+                        "File Name": file_basename,
+                        "Invoice No": inv.invoice_number,
+                        "Airline": inv.airline,
+                        "Vendor GSTIN": inv.vendor_gstin,
+                        "Mapped Org Branch": org_branch,
+                        "In Vendor Map?": in_map,
+                        "Customer GSTIN": inv.customer_gstin,
+                        "Mapped Cust Branch": cust_branch,
+                        "Amount": first_row.get("Amount", "0")
+                    })
+
                 for row in rows:
                     writer.writerow(row)
         
         generated_files.append(filepath)
         print(f"Generated: {filepath} ({len(inv_list)} invoice(s))")
     
+    # Generate Summary Report
+    summary_path = generate_summary_report(summary_data, output_dir)
+    if summary_path:
+        generated_files.append(summary_path)
+
     return generated_files
 
 
@@ -1584,7 +1683,11 @@ class InvoiceParserApp:
         clear_log_btn.pack(side=RIGHT)
     
     def _log(self, message: str, tag: str = None):
-        """Add a message to the log text widget."""
+        """Add a message to the log text widget (Thread-safe)."""
+        self.root.after(0, lambda: self._log_internal(message, tag))
+
+    def _log_internal(self, message: str, tag: str = None):
+        """Internal method to update log widget in main thread."""
         self.log_text.configure(state="normal")
         timestamp = datetime.now().strftime("%H:%M:%S")
         formatted = f"[{timestamp}] {message}\n"
@@ -1707,8 +1810,17 @@ class InvoiceParserApp:
                         group_by_gstin=self.group_by_gstin.get()
                     )
                     
+                    self._log(f"Successfully generated {len(generated_files)} file(s).", "success")
+                    has_summary = any("Processing_Summary" in f for f in generated_files)
+                    
                     for f in generated_files:
-                        self._log(f"  ✓ Created: {os.path.basename(f)}", "success")
+                        if "Processing_Summary" in f:
+                            self._log(f"  ⚠ Validation Report: {os.path.basename(f)}", "warning")
+                        else:
+                            self._log(f"  - {os.path.basename(f)}", "success")
+                    
+                    if has_summary:
+                        self._log("Check the Validation Report for any missing mappings.", "info")
                     
                     self._log(f"\n✓ Complete! Processed {success_count}/{total} invoices.", "success")
                     self._log(f"  Output directory: {output_dir}", "info")

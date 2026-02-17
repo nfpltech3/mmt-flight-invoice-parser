@@ -33,7 +33,18 @@ The Airline Invoice Parser is a Windows desktop application designed to streamli
 3. Click **Select Folder**.
 4. The app will generate the CSV files and display a "✓ Complete!" message in the log.
    - The files are named automatically: `Flight_Exp_[State]_[GSTIN-Suffix]_[Date].csv` (e.g., `Flight_Exp_Maharashtra_J1Z4_14FEB.csv`).
-   - **Note:** If invoices belong to different Customer GSTINs, separate CSV files will be created for each group.
+   - **Validation Report:** A summary file named `Processing_Summary_[Date].csv` is also generated. Check this file to see if any invoices have missing branches or mapping issues.
+
+---
+
+### 3. Data Validation (New Feature)
+The application now generates a **Validation Report** (`Processing_Summary.csv`) in the output folder. Use this to troubleshoot Logisys errors.
+
+| Issue | Meaning | How to Fix |
+| :--- | :--- | :--- |
+| **Org Branch Empty** | The **Vendor GSTIN** on the invoice is not mapped to any known branch. | Provide the Vendor GSTIN and City to IT support to update the mapping. |
+| **Vendor GSTIN not in Map**| Same as above. The system fell back to the State name (e.g., "Maharashtra"), which Logisys might reject if it expects a specific city. | Update the mapping. |
+| **Customer Branch Empty** | The Customer GSTIN is not recognized. | Verify the Customer GSTIN. |
 
 ---
 
