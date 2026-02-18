@@ -833,7 +833,7 @@ def parse_invoice(pdf_path: str) -> InvoiceData:
     data.filename = filename # Set filename
     data.extraction_errors.append(f"Unknown invoice format - no parser matched")
     return data
-
+ 
 
 
 # ============================================================
@@ -884,7 +884,13 @@ VENDOR_GSTIN_MAP = {
     "24AACCN6194P1ZV": "GUJARAT",
     "03AACCN6194P1ZZ": "PUNJAB",
     "27AABCA0522B1ZK": "MUMBAI",
-    "29AABCI2726B1ZY": "KARNATAKA"
+    "29AABCI2726B1ZY": "KARNATAKA",
+    "08AACCN6194P1ZP": "RAJASTHAN",
+    "30AACCN6194P1Z2": "GOA",
+    "09AABCI2726B1Z0": "UTTAR PRADESH",
+    "23AABCI2726B1ZA": "MADHYA PRADESH",
+    "29ABECS9580P1Z8": "KARNATAKA",
+    "27AAACG2368J1ZI": "MAHARASHTRA"
 }
 
 # Map Customer GSTIN to Branch
